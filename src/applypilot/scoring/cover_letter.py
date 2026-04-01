@@ -16,7 +16,6 @@ from applypilot.database import get_connection, get_jobs_by_stage
 from applypilot.llm import get_client
 from applypilot.scoring.validator import (
     BANNED_WORDS,
-    LLM_LEAK_PHRASES,
     sanitize_text,
     validate_cover_letter,
 )
@@ -63,7 +62,6 @@ def _build_cover_letter_prompt(profile: dict) -> str:
     # Build the full banned list from the validator so the prompt stays in sync
     # with what will actually be rejected — the validator checks all of these.
     all_banned = ", ".join(f'"{w}"' for w in BANNED_WORDS)
-    leak_banned = ", ".join(f'"{p}"' for p in LLM_LEAK_PHRASES)
 
     return f"""Write a cover letter for {sign_off_name}. The goal is to get an interview.
 
@@ -77,9 +75,6 @@ PARAGRAPH 3 (1-2 sentences): One specific thing about the company from the job d
 
 BANNED WORDS AND PHRASES (automated validator rejects ANY of these — do not use even once):
 {all_banned}
-
-ALSO BANNED (meta-commentary the validator catches):
-{leak_banned}
 
 BANNED PUNCTUATION: No em dashes (—) or en dashes (–). Use commas or periods.
 
@@ -140,7 +135,7 @@ def generate_cover_letter(
         f"TITLE: {job['title']}\n"
         f"COMPANY: {job['site']}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
-        f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
+        f"DESCRIPTION:\n{(job.get('full_description') or '')[:4000]}"
     )
 
     avoid_notes: list[str] = []
