@@ -573,17 +573,20 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
     conn.commit()
 
     elapsed = time.time() - t0
+    approved_total = stats.get("approved", 0) + stats.get("approved_with_judge_warning", 0)
     log.info(
-        "Tailoring done in %.1fs: %d approved, %d failed_validation, %d failed_judge, %d errors",
+        "Tailoring done in %.1fs: %d approved (%d with judge warning), "
+        "%d failed_validation, %d failed_judge, %d errors",
         elapsed,
-        stats.get("approved", 0),
+        approved_total,
+        stats.get("approved_with_judge_warning", 0),
         stats.get("failed_validation", 0),
         stats.get("failed_judge", 0),
         stats.get("error", 0),
     )
 
     return {
-        "approved": stats.get("approved", 0),
+        "approved": approved_total,
         "failed": stats.get("failed_validation", 0) + stats.get("failed_judge", 0),
         "errors": stats.get("error", 0),
         "elapsed": elapsed,
