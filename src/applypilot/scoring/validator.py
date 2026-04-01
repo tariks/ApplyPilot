@@ -68,7 +68,9 @@ FABRICATION_WATCHLIST: set[str] = {
     "certif", "certified", "pmp", "scrum master", "aws certified",
 }
 
-REQUIRED_SECTIONS: set[str] = {"SUMMARY", "TECHNICAL SKILLS", "EXPERIENCE", "PROJECTS", "EDUCATION"}
+REQUIRED_SECTIONS: set[str] = {"SUMMARY", "TECHNICAL SKILLS", "EXPERIENCE", "EDUCATION"}
+# PROJECTS is optional for research/academic CVs (publications may substitute)
+OPTIONAL_SECTIONS: set[str] = {"PROJECTS", "PUBLICATIONS"}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
@@ -113,10 +115,16 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
     errors: list[str] = []
     warnings: list[str] = []
 
-    # Required keys — always checked regardless of mode
-    for key in ("title", "summary", "skills", "experience", "projects", "education"):
+    # Required keys — always checked regardless of mode.
+    # "projects" is optional: research/academic CVs may have publications instead.
+    for key in ("title", "summary", "skills", "experience", "education"):
         if key not in data or not data[key]:
             errors.append(f"Missing required field: {key}")
+    # Must have at least one of projects or publications (or both)
+    has_projects = bool(data.get("projects"))
+    has_publications = bool(data.get("publications"))
+    if not has_projects and not has_publications:
+        errors.append("Missing content: must have 'projects', 'publications', or both")
     if errors:
         return {"passed": False, "errors": errors, "warnings": warnings}
 
@@ -148,8 +156,8 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
 
-    # Projects: collect bullets
-    if isinstance(data["projects"], list):
+    # Projects: collect bullets (optional field)
+    if isinstance(data.get("projects"), list):
         for entry in data["projects"]:
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
@@ -203,16 +211,21 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     resume_facts = profile.get("resume_facts", {})
 
     # 1. Check required sections exist (flexible matching)
+    # PROJECTS is optional for research/academic CVs -- publications may substitute.
     section_variants: dict[str, list[str]] = {
         "SUMMARY": ["summary", "professional summary", "profile"],
         "TECHNICAL SKILLS": ["technical skills", "skills", "tech stack", "core skills", "technologies"],
         "EXPERIENCE": ["experience", "work experience", "professional experience"],
-        "PROJECTS": ["projects", "personal projects", "key projects", "selected projects"],
         "EDUCATION": ["education", "academic background"],
     }
     for section, variants in section_variants.items():
         if not any(v in text_lower for v in variants):
             errors.append(f"Missing required section: {section} (or variant)")
+    # Must have at least one of projects or publications
+    has_projects_section = any(v in text_lower for v in ["projects", "personal projects", "key projects", "selected projects"])
+    has_publications_section = "publications" in text_lower
+    if not has_projects_section and not has_publications_section:
+        errors.append("Missing content section: must have 'projects', 'publications', or both")
 
     # 2. Check name preserved (warn, don't error -- we can inject it)
     full_name = personal.get("full_name", "")

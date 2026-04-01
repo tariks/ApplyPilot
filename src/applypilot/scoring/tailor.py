@@ -53,69 +53,101 @@ def _build_tailor_prompt(profile: dict) -> str:
 
     # Preserved entities
     companies = resume_facts.get("preserved_companies", [])
-    projects = resume_facts.get("preserved_projects", [])
     school = resume_facts.get("preserved_school", "")
     real_metrics = resume_facts.get("real_metrics", [])
+    preserved_publications = resume_facts.get("preserved_publications", [])
 
     companies_str = ", ".join(companies) if companies else "N/A"
-    projects_str = ", ".join(projects) if projects else "N/A"
     metrics_str = ", ".join(real_metrics) if real_metrics else "N/A"
 
     # Include ALL banned words from the validator so the LLM knows exactly
-    # what will be rejected — the validator checks for these automatically.
+    # what will be rejected -- the validator checks for these automatically.
     banned_str = ", ".join(BANNED_WORDS)
 
     education = profile.get("experience", {})
     education_level = education.get("education_level", "")
 
-    return f"""You are a senior technical recruiter rewriting a resume to get this person an interview.
+    # Publications hint for the prompt (if profile declares them)
+    pubs_hint = ""
+    if preserved_publications:
+        pubs_str = "; ".join(preserved_publications[:6])
+        suffix = "..." if len(preserved_publications) > 6 else ""
+        pubs_hint = f"\nPreserved publications (never remove or alter these): {pubs_str}{suffix}"
+
+    return f"""You are a senior technical recruiter and research hiring specialist rewriting a resume to get this person an interview.
 
 Take the base resume and job description. Return a tailored resume as a JSON object.
 
-## RECRUITER SCAN (6 seconds):
-1. Title -- matches what they're hiring?
-2. Summary -- 2 sentences proving you've done this work
-3. First 3 bullets of most recent role -- verbs and outcomes match?
-4. Skills -- must-haves visible immediately?
+## STEP 1 -- DETECT ROLE TYPE from the job description:
+- RESEARCH: bioinformatics, computational biology, genomics, research scientist, postdoc, faculty, data science (academic/NIH/biotech R&D)
+- INDUSTRY: software engineer, ML engineer, data engineer, backend, fullstack, AI/ML (product), data scientist (tech company)
+Apply the matching ruleset below. When a job spans both (e.g. ML research at a biotech), blend the rules.
+
+## STEP 2 -- FIRST-PASS SCAN (what the reader checks in 6-10 seconds):
+RESEARCH roles -- hiring committees scan in this order:
+1. Degree and institution -- does their training match the domain?
+2. Summary -- does it name the relevant biological/computational area?
+3. Publications -- quality venues (Nature/Science/Cell/NeurIPS/top domain journals)?
+4. Experience -- did they actually run these experiments/pipelines?
+
+INDUSTRY roles -- recruiters scan in this order:
+1. Title -- matches the target role?
+2. Summary -- 2 sentences proving they've shipped this kind of work.
+3. First 3 bullets of most recent role -- verbs and outcomes match the JD?
+4. Skills -- must-have tools visible immediately?
 
 ## SKILLS BOUNDARY (real skills only):
 {skills_block}
 
-You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, Redis if PostgreSQL). No unrelated languages/frameworks.
+You MAY add 2-3 closely related tools (Kubernetes if Docker, Terraform if AWS, Redis if PostgreSQL, Snakemake if Nextflow, DESeq2 if edgeR). No unrelated languages or frameworks.
 
 ## TAILORING RULES:
 
-TITLE: Match the target role. Keep seniority (Senior/Lead/Staff). Drop company suffixes and team names.
+TITLE: Match the target role. Keep seniority level (Senior/Lead/Staff/Principal/Postdoctoral). Remove institution-specific team names.
 
-SUMMARY: Rewrite from scratch. Lead with the 1-2 skills that matter most for THIS role. Sound like someone who's done this job.
+SUMMARY: Rewrite from scratch for THIS role.
+- RESEARCH: Lead with the biological/computational domain, name the methodology, and cite the strongest publication credential (e.g. "Nature 2020", "Science 2013"). 2-3 sentences.
+- INDUSTRY: Lead with the 1-2 technical skills that matter most. Sound like someone who has shipped this kind of work. 2-3 sentences.
 
-SKILLS: Reorder each category so the job's must-haves appear first.
+SKILLS: Reorder each category so the job's must-haves appear first. Do not add skills outside the boundary above.
 
-Reframe EVERY bullet for this role. Same real work, different angle. Every bullet must be reworded. Never copy verbatim.
+EXPERIENCE: Reframe EVERY bullet for this role -- same real work, different angle. Every bullet must be reworded. Never copy verbatim.
+- RESEARCH bullets: methodology verb + what you built/discovered + evidence of impact. Examples: "Developed Peakachu, a CNN loop-caller trained on Hi-C maps, adopted by 30+ labs"; "Defined the Microbial Mortality Index across a 200-patient ICU cohort, published in Gut Pathogens 2023".
+- INDUSTRY bullets: action verb + what you built + quantified outcome. Examples: "Automated ETL pipeline in Python + Airflow, reduced daily processing time from 8 hours to 45 minutes".
+- Vary verbs. Most relevant first. Max 4 bullets per role.
 
-PROJECTS: Reorder by relevance. Drop irrelevant projects entirely.
+PUBLICATIONS (if present in the original resume):
+- RESEARCH roles: carry all publications verbatim from the original -- full title, venue, year. Never invent, abbreviate, or omit any. List them as plain strings in the "publications" array.
+- INDUSTRY roles: omit publications entirely OR include at most 2-3 most relevant ones. Do not force a publications section onto a dev resume if the role does not expect it.{pubs_hint}
 
-BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized). Most relevant first. Max 4 per section.
+PROJECTS: Real software tools, pipelines, or products the candidate built. Reorder by relevance. Drop low-relevance ones. For pure research CVs with no distinct software projects, you may return an empty array.
 
 ## VOICE:
-- Write like a real engineer. Short, direct.
-- GOOD: "Automated financial reporting with Python + API integrations, cut processing time from 10 hours to 2"
+- Write like a real engineer or researcher. Short, direct. No fluff.
+- RESEARCH GOOD: "Developed Peakachu, a supervised ML toolkit for Hi-C loop detection; distributed as open-source, adopted by 30+ labs"
+- INDUSTRY GOOD: "Automated financial reporting pipeline in Python + Airflow, cut processing time from 10 hours to 2"
 - BAD: "Leveraged cutting-edge AI technologies to drive transformative operational efficiencies"
-- BANNED WORDS (using ANY of these = validation failure — do not use them even once):
+- BANNED WORDS (using ANY of these = validation failure -- do not use even once):
   {banned_str}
 - No em dashes. Use commas, periods, or hyphens.
 
+## LENGTH:
+- RESEARCH roles: 1-2 pages is appropriate. Do not cut publications, degrees, or substantive experience to hit 1 page.
+- INDUSTRY roles: target 1 page. Cut low-relevance content ruthlessly.
+
 ## HARD RULES:
-- Do NOT invent work, companies, degrees, or certifications
-- Do NOT change real numbers ({metrics_str})
-- Preserved companies: {companies_str} -- names stay as-is
-- Preserved school: {school}
-- Must fit 1 page.
+- Do NOT invent work, companies, degrees, certifications, or publications
+- Do NOT alter any real number or metric ({metrics_str})
+- Do NOT change preserved institution/company names: {companies_str}
+- Do NOT change the school name: {school}
+- Do NOT invent or modify publication titles, venues, or years
 
 ## OUTPUT: Return ONLY valid JSON. No markdown fences. No commentary. No "here is" preamble.
 
-{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","DevOps & Infra":"...","Databases":"...","Tools":"..."}},"experience":[{{"header":"Title at Company","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3","bullet 4"]}}],"projects":[{{"header":"Project Name - Description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"education":"{school} | {education_level}"}}"""
+"publications" is optional -- include it only when the original resume has publications and the role warrants them.
+"projects" may be an empty array for pure research CVs.
 
+{{"title":"Role Title","summary":"2-3 tailored sentences.","skills":{{"Languages":"...","Frameworks":"...","Domain":"..."}},"experience":[{{"header":"Title at Institution/Company","subtitle":"Methods/Tech | Dates","bullets":["bullet 1","bullet 2","bullet 3"]}}],"projects":[{{"header":"Tool Name - one-line description","subtitle":"Tech | Dates","bullets":["bullet 1","bullet 2"]}}],"publications":["Full title (Venue, Year)","Full title (Venue, Year)"],"education":"{school} | {education_level}"}}"""
 
 def _build_judge_prompt(profile: dict) -> str:
     """Build the LLM judge prompt from the user's profile."""
@@ -280,14 +312,24 @@ def assemble_resume_text(data: dict, profile: dict) -> str:
             lines.append(f"- {sanitize_text(b)}")
         lines.append("")
 
-    # Projects
-    lines.append("PROJECTS")
-    for entry in data.get("projects", []):
-        lines.append(sanitize_text(entry.get("header", "")))
-        if entry.get("subtitle"):
-            lines.append(sanitize_text(entry["subtitle"]))
-        for b in entry.get("bullets", []):
-            lines.append(f"- {sanitize_text(b)}")
+    # Projects (optional -- may be empty for pure research CVs)
+    projects = data.get("projects", [])
+    if projects:
+        lines.append("PROJECTS")
+        for entry in projects:
+            lines.append(sanitize_text(entry.get("header", "")))
+            if entry.get("subtitle"):
+                lines.append(sanitize_text(entry["subtitle"]))
+            for b in entry.get("bullets", []):
+                lines.append(f"- {sanitize_text(b)}")
+            lines.append("")
+
+    # Publications (optional -- included for research/academic CVs)
+    publications = data.get("publications", [])
+    if publications:
+        lines.append("PUBLICATIONS")
+        for pub in publications:
+            lines.append(sanitize_text(str(pub)))
         lines.append("")
 
     # Education

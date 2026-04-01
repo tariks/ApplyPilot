@@ -190,6 +190,13 @@ def build_html(resume: dict) -> str:
             items += f'<div class="entry"><div class="entry-title">{e["title"]}</div>{subtitle}<ul>{bullets}</ul></div>'
         proj_html = f'<div class="section"><div class="section-title">Projects</div>{items}</div>'
 
+    # Publications (optional -- present on research/academic resumes)
+    pubs_html = ""
+    if "PUBLICATIONS" in sections:
+        pub_lines = [line.strip() for line in sections["PUBLICATIONS"].strip().split("\n") if line.strip()]
+        items = "".join(f"<div class='pub-entry'>{line}</div>" for line in pub_lines)
+        pubs_html = f'<div class="section"><div class="section-title">Publications</div>{items}</div>'
+
     # Education
     edu_html = ""
     if "EDUCATION" in sections:
@@ -313,6 +320,12 @@ li {{
 .edu {{
     font-size: 10pt;
 }}
+.pub-entry {{
+    font-size: 9pt;
+    margin-bottom: 2px;
+    line-height: 1.35;
+    color: #333;
+}}
 </style>
 </head>
 <body>
@@ -326,6 +339,7 @@ li {{
 {skills_html}
 {exp_html}
 {proj_html}
+{pubs_html}
 {edu_html}
 </body>
 </html>"""
