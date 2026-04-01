@@ -84,7 +84,7 @@ def score_job(resume_text: str, job: dict) -> dict:
         f"TITLE: {job['title']}\n"
         f"COMPANY: {job['site']}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
-        f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
+        f"DESCRIPTION:\n{(job.get('full_description') or '')[:4000]}"
     )
 
     messages = [

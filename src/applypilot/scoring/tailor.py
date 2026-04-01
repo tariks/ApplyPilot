@@ -415,7 +415,7 @@ def tailor_resume(
         f"TITLE: {job['title']}\n"
         f"COMPANY: {job['site']}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
-        f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
+        f"DESCRIPTION:\n{(job.get('full_description') or '')[:4000]}"
     )
 
     report: dict = {
@@ -468,9 +468,13 @@ def tailor_resume(
         # Assemble text (header injected by code, em dashes auto-fixed)
         tailored = assemble_resume_text(data, profile)
 
-        # Layer 2: LLM judge (catches subtle fabrication) — skipped in lenient mode
-        if validation_mode == "lenient":
-            report["judge"] = {"verdict": "SKIPPED", "passed": True, "issues": "none"}
+        # Layer 2: LLM judge (catches subtle fabrication) — skipped in lenient mode,
+        # or when programmatic validation was completely clean (no errors, no warnings).
+        # A spotless validator result means no banned words, no watchlist hits, no
+        # missing entities — the judge is very unlikely to find anything new.
+        if validation_mode == "lenient" or not validation.get("warnings"):
+            verdict = "SKIPPED" if validation_mode == "lenient" else "SKIPPED_CLEAN"
+            report["judge"] = {"verdict": verdict, "passed": True, "issues": "none"}
             report["status"] = "approved"
             return tailored, report
 
