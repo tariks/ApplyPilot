@@ -17,6 +17,11 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+
+class TruncatedResponseError(Exception):
+    """LLM response was truncated (hit token limit, safety filter, etc.)."""
+
+
 # ---------------------------------------------------------------------------
 # Provider detection
 # ---------------------------------------------------------------------------
@@ -161,6 +166,12 @@ class LLMClient:
         )
         resp.raise_for_status()
         data = resp.json()
+        # Check finish reason — Gemini uses "STOP" for normal completion
+        finish = data["candidates"][0].get("finishReason", "STOP")
+        if finish not in ("STOP", "stop"):
+            text = data["candidates"][0].get("content", {}).get("parts", [{}])[0].get("text", "")
+            log.warning("Gemini response truncated (finishReason=%s), got %d chars", finish, len(text))
+            raise TruncatedResponseError(f"Gemini finishReason={finish}")
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
     # -- Anthropic native Messages API --------------------------------------
@@ -211,6 +222,12 @@ class LLMClient:
         )
         resp.raise_for_status()
         data = resp.json()
+        # Check stop reason — Anthropic uses "end_turn" for normal completion
+        stop = data.get("stop_reason", "end_turn")
+        if stop not in ("end_turn", "stop_sequence"):
+            text = data.get("content", [{}])[0].get("text", "")
+            log.warning("Anthropic response truncated (stop_reason=%s), got %d chars", stop, len(text))
+            raise TruncatedResponseError(f"Anthropic stop_reason={stop}")
         return data["content"][0]["text"]
 
     # -- OpenAI-compat API --------------------------------------------------
@@ -250,6 +267,12 @@ class LLMClient:
     def _handle_compat_response(resp: httpx.Response) -> str:
         resp.raise_for_status()
         data = resp.json()
+        # Check finish reason — OpenAI compat uses "stop" for normal completion
+        finish = data["choices"][0].get("finish_reason", "stop")
+        if finish not in ("stop", None):
+            text = data["choices"][0].get("message", {}).get("content", "")
+            log.warning("LLM response truncated (finish_reason=%s), got %d chars", finish, len(text))
+            raise TruncatedResponseError(f"finish_reason={finish}")
         return data["choices"][0]["message"]["content"]
 
     # -- public API ---------------------------------------------------------
@@ -298,6 +321,15 @@ class LLMClient:
                         f"Native: {native_exc.response.status_code} — "
                         f"{native_exc.response.text[:200]}"
                     ) from native_exc
+
+            except TruncatedResponseError:
+                if attempt < _MAX_RETRIES - 1:
+                    log.warning(
+                        "Retrying after truncated response (attempt %d/%d)",
+                        attempt + 1, _MAX_RETRIES,
+                    )
+                    continue
+                raise
 
             except httpx.HTTPStatusError as exc:
                 resp = exc.response

@@ -405,10 +405,12 @@ def convert_to_pdf(
 
 
 def batch_convert(limit: int = 50) -> int:
-    """Convert .txt files in TAILORED_DIR that don't have corresponding PDFs.
+    """Convert approved .txt files to PDF.
 
-    Scans for .txt files (excluding _JOB.txt and _REPORT.json), checks if a
-    .pdf with the same stem already exists, and converts any that are missing.
+    Only converts files that are recorded as approved in the DB
+    (tailored_resume_path or cover_letter_path is set). This prevents
+    converting failed/rejected drafts that happen to exist on disk.
+
     Records pdf_at in the DB for each converted file so the streaming pipeline
     can detect when all PDFs are done.
 
@@ -418,23 +420,37 @@ def batch_convert(limit: int = 50) -> int:
     Returns:
         Number of PDFs generated.
     """
-    if not TAILORED_DIR.exists():
-        log.warning("Tailored directory does not exist: %s", TAILORED_DIR)
-        return 0
+    from datetime import datetime, timezone
+    from applypilot.database import get_connection
 
-    txt_files = sorted(TAILORED_DIR.glob("*.txt"))
-    # Exclude _JOB.txt and _CL.txt files from resume conversion
-    # (they get their own conversion calls)
-    candidates = [
-        f for f in txt_files
-        if not f.name.endswith("_JOB.txt")
-    ]
+    conn = get_connection()
 
-    # Filter to those without a corresponding PDF
+    # Gather DB-approved file paths that still need PDF conversion
+    approved_paths: set[str] = set()
+
+    # Tailored resumes without pdf_at
+    rows = conn.execute(
+        "SELECT tailored_resume_path FROM jobs "
+        "WHERE tailored_resume_path IS NOT NULL AND pdf_at IS NULL"
+    ).fetchall()
+    for row in rows:
+        approved_paths.add(row[0])
+
+    # Cover letters without a corresponding PDF on disk
+    cl_rows = conn.execute(
+        "SELECT cover_letter_path FROM jobs "
+        "WHERE cover_letter_path IS NOT NULL"
+    ).fetchall()
+    for row in cl_rows:
+        cl_path = Path(row[0])
+        if cl_path.exists() and not cl_path.with_suffix(".pdf").exists():
+            approved_paths.add(row[0])
+
+    # Filter to files that exist on disk and don't have PDFs yet
     to_convert: list[Path] = []
-    for f in candidates:
-        pdf_path = f.with_suffix(".pdf")
-        if not pdf_path.exists():
+    for p in approved_paths:
+        f = Path(p)
+        if f.exists() and not f.with_suffix(".pdf").exists():
             to_convert.append(f)
         if len(to_convert) >= limit:
             break
@@ -444,9 +460,6 @@ def batch_convert(limit: int = 50) -> int:
         return 0
 
     log.info("Converting %d files to PDF...", len(to_convert))
-    from datetime import datetime, timezone
-    from applypilot.database import get_connection
-    conn = get_connection()
     now = datetime.now(timezone.utc).isoformat()
 
     converted = 0
@@ -456,8 +469,9 @@ def batch_convert(limit: int = 50) -> int:
             converted += 1
             # Mark pdf_at so the streaming pipeline knows this file is done
             conn.execute(
-                "UPDATE jobs SET pdf_at = ? WHERE tailored_resume_path = ?",
-                (now, str(f)),
+                "UPDATE jobs SET pdf_at = ? "
+                "WHERE tailored_resume_path = ? OR cover_letter_path = ?",
+                (now, str(f), str(f)),
             )
         except Exception as e:
             log.error("Failed to convert %s: %s", f.name, e)

@@ -344,6 +344,34 @@ def status() -> None:
 
 
 @app.command()
+def sync() -> None:
+    """Reconcile DB status with files on disk.
+
+    Finds tailored resumes and cover letters that exist on disk but aren't
+    recorded in the DB (e.g. after an interrupted run). Also resets exhausted
+    retry counters so failed jobs can be re-attempted.
+    """
+    _bootstrap()
+
+    from applypilot.database import sync_from_disk
+
+    console.print("\n[bold]Syncing DB with disk files...[/bold]\n")
+    result = sync_from_disk()
+
+    console.print(f"  Tailored resumes linked:  {result['tailored_linked']}")
+    console.print(f"  Cover letters linked:     {result['covers_linked']}")
+    console.print(f"  Tailor retries reset:     {result['tailor_attempts_reset']}")
+    console.print(f"  Cover retries reset:      {result['cover_attempts_reset']}")
+
+    total = sum(result.values())
+    if total == 0:
+        console.print("\n  [dim]DB is already in sync with disk.[/dim]")
+    else:
+        console.print(f"\n  [green]Synced {total} records.[/green]")
+    console.print()
+
+
+@app.command()
 def dashboard() -> None:
     """Generate and open the HTML dashboard in your browser."""
     _bootstrap()
