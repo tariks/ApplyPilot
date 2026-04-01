@@ -21,14 +21,22 @@ log = logging.getLogger(__name__)
 # Provider detection
 # ---------------------------------------------------------------------------
 
+_ANTHROPIC_BASE = "https://api.anthropic.com/v1"
+_ANTHROPIC_VERSION = "2023-06-01"
+_ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+
+
 def _detect_provider() -> tuple[str, str, str]:
     """Return (base_url, model, api_key) based on environment variables.
 
+    Detection order: GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, LLM_URL.
+    LLM_MODEL overrides the model name for any provider.
     Reads env at call time (not module import time) so that load_env() called
     in _bootstrap() is always visible here.
     """
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     openai_key = os.environ.get("OPENAI_API_KEY", "")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     local_url = os.environ.get("LLM_URL", "")
     model_override = os.environ.get("LLM_MODEL", "")
 
@@ -46,6 +54,13 @@ def _detect_provider() -> tuple[str, str, str]:
             openai_key,
         )
 
+    if anthropic_key and not local_url:
+        return (
+            _ANTHROPIC_BASE,
+            model_override or _ANTHROPIC_DEFAULT_MODEL,
+            anthropic_key,
+        )
+
     if local_url:
         return (
             local_url.rstrip("/"),
@@ -55,7 +70,7 @@ def _detect_provider() -> tuple[str, str, str]:
 
     raise RuntimeError(
         "No LLM provider configured. "
-        "Set GEMINI_API_KEY, OPENAI_API_KEY, or LLM_URL in your environment."
+        "Set GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or LLM_URL in your environment."
     )
 
 
@@ -76,12 +91,15 @@ _GEMINI_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
 class LLMClient:
-    """Thin LLM client supporting OpenAI-compatible and native Gemini endpoints.
+    """Thin LLM client supporting OpenAI-compatible, native Gemini, and Anthropic endpoints.
 
     For Gemini keys, starts on the OpenAI-compat layer. On a 403 (which
     happens with preview/experimental models not exposed via compat), it
     automatically switches to the native generateContent API and stays there
     for the lifetime of the process.
+
+    For Anthropic keys, uses the native Messages API directly (Anthropic does
+    not expose an OpenAI-compatible /chat/completions endpoint).
     """
 
     def __init__(self, base_url: str, model: str, api_key: str) -> None:
@@ -92,6 +110,7 @@ class LLMClient:
         # True once we've confirmed the native Gemini API works for this model
         self._use_native_gemini: bool = False
         self._is_gemini: bool = base_url.startswith(_GEMINI_COMPAT_BASE)
+        self._is_anthropic: bool = base_url.startswith(_ANTHROPIC_BASE)
 
     # -- Native Gemini API --------------------------------------------------
 
@@ -143,6 +162,56 @@ class LLMClient:
         resp.raise_for_status()
         data = resp.json()
         return data["candidates"][0]["content"]["parts"][0]["text"]
+
+    # -- Anthropic native Messages API --------------------------------------
+
+    def _chat_native_anthropic(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Call the Anthropic Messages API.
+
+        Anthropic uses a different format from OpenAI: system prompt is a
+        top-level field, response is in content[0]["text"], and authentication
+        uses x-api-key instead of Authorization: Bearer.
+        """
+        system_text = ""
+        user_messages: list[dict] = []
+
+        for msg in messages:
+            role = msg["role"]
+            text = msg.get("content", "")
+            if role == "system":
+                # Anthropic takes system as a top-level string (last system wins)
+                system_text = text
+            else:
+                # Map "assistant" to "assistant", "user" to "user" (same names)
+                user_messages.append({"role": role, "content": text})
+
+        payload: dict = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": user_messages,
+        }
+        if system_text:
+            payload["system"] = system_text
+        if temperature > 0:
+            payload["temperature"] = temperature
+
+        resp = self._client.post(
+            f"{_ANTHROPIC_BASE}/messages",
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": _ANTHROPIC_VERSION,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["content"][0]["text"]
 
     # -- OpenAI-compat API --------------------------------------------------
 
@@ -201,6 +270,10 @@ class LLMClient:
 
         for attempt in range(_MAX_RETRIES):
             try:
+                # Anthropic has its own Messages API -- always use native handler
+                if self._is_anthropic:
+                    return self._chat_native_anthropic(messages, temperature, max_tokens)
+
                 # Route to native Gemini if we've already confirmed it's needed
                 if self._use_native_gemini:
                     return self._chat_native_gemini(messages, temperature, max_tokens)

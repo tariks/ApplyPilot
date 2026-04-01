@@ -11,11 +11,32 @@ from rich.table import Table
 
 from applypilot import __version__
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%H:%M:%S",
-)
+def _configure_logging() -> None:
+    """Configure CLI logging: INFO to terminal, per-attempt tailor/cover details to file."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # Route verbose per-attempt tailor and cover-letter logs to a dedicated
+    # file so the terminal only shows stage-level progress, not every retry.
+    from applypilot.config import LOG_DIR
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _file_fmt = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
+    )
+    for logger_name in ("applypilot.scoring.tailor", "applypilot.scoring.cover_letter"):
+        file_log = logging.getLogger(logger_name)
+        file_log.propagate = False  # suppress from terminal
+        fh = logging.FileHandler(
+            LOG_DIR / f"{logger_name.split('.')[-1]}.log", encoding="utf-8"
+        )
+        fh.setFormatter(_file_fmt)
+        file_log.addHandler(fh)
+
+
+_configure_logging()
 
 app = typer.Typer(
     name="applypilot",
