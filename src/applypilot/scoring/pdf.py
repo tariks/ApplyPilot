@@ -395,6 +395,8 @@ def batch_convert(limit: int = 50) -> int:
 
     Scans for .txt files (excluding _JOB.txt and _REPORT.json), checks if a
     .pdf with the same stem already exists, and converts any that are missing.
+    Records pdf_at in the DB for each converted file so the streaming pipeline
+    can detect when all PDFs are done.
 
     Args:
         limit: Maximum number of files to convert.
@@ -428,13 +430,26 @@ def batch_convert(limit: int = 50) -> int:
         return 0
 
     log.info("Converting %d files to PDF...", len(to_convert))
+    from datetime import datetime, timezone
+    from applypilot.database import get_connection
+    conn = get_connection()
+    now = datetime.now(timezone.utc).isoformat()
+
     converted = 0
     for f in to_convert:
         try:
             convert_to_pdf(f)
             converted += 1
+            # Mark pdf_at so the streaming pipeline knows this file is done
+            conn.execute(
+                "UPDATE jobs SET pdf_at = ? WHERE tailored_resume_path = ?",
+                (now, str(f)),
+            )
         except Exception as e:
             log.error("Failed to convert %s: %s", f.name, e)
+
+    if converted:
+        conn.commit()
 
     log.info("Done: %d/%d PDFs generated in %s", converted, len(to_convert), TAILORED_DIR)
     return converted

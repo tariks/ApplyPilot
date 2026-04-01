@@ -236,7 +236,7 @@ _PENDING_SQL: dict[str, str] = {
     ),
     "pdf": (
         "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL "
-        "AND tailored_resume_path LIKE '%.txt'"
+        "AND pdf_at IS NULL"
     ),
 }
 

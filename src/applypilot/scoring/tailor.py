@@ -562,8 +562,9 @@ def run_tailoring(min_score: int = 7, limit: int = 20,
         if r["status"] in _success_statuses:
             conn.execute(
                 "UPDATE jobs SET tailored_resume_path=?, tailored_at=?, "
+                "pdf_at=?, "
                 "tailor_attempts=COALESCE(tailor_attempts,0)+1 WHERE url=?",
-                (r["path"], now, r["url"]),
+                (r["path"], now, now if r["pdf_path"] else None, r["url"]),
             )
         else:
             conn.execute(
