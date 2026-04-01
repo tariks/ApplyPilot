@@ -337,13 +337,14 @@ def validate_cover_letter(text: str, mode: str = "normal") -> dict:
             else:  # normal
                 warnings.append(msg)
 
-    # 3. Word count
+    # 3. Word count — check min (all modes) and max (strict/normal)
     words = len(text.split())
-    if mode == "strict" and words > 250:
+    if words < 80:
+        errors.append(f"Too short ({words} words, min 80). Response likely truncated.")
+    elif mode == "strict" and words > 250:
         errors.append(f"Too long ({words} words). Max 250.")
     elif mode == "normal" and words > 275:
         warnings.append(f"Long ({words} words). Target 250.")
-    # lenient: no word count check
 
     # 4. LLM self-talk — always an error regardless of mode
     found_leaks = [p for p in LLM_LEAK_PHRASES if p in text_lower]

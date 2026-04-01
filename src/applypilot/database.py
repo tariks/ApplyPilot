@@ -331,6 +331,93 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
     return stats
 
 
+def sync_from_disk() -> dict:
+    """Reconcile DB status with files on disk.
+
+    Scans TAILORED_DIR and COVER_LETTER_DIR for files that exist on disk
+    but are not reflected in the DB (tailored_resume_path / cover_letter_path
+    is NULL). Updates the DB to match.
+
+    Also resets attempt counters for jobs that exhausted retries without
+    producing an output file, so they can be retried.
+
+    Returns:
+        {"tailored_linked": int, "covers_linked": int,
+         "tailor_attempts_reset": int, "cover_attempts_reset": int}
+    """
+    import re
+    from applypilot.config import TAILORED_DIR, COVER_LETTER_DIR
+
+    conn = get_connection()
+    now = datetime.now(timezone.utc).isoformat()
+    result = {
+        "tailored_linked": 0, "covers_linked": 0,
+        "tailor_attempts_reset": 0, "cover_attempts_reset": 0,
+    }
+
+    # --- Phase 1: Link orphaned disk files to DB rows ---
+    # Fetch all jobs that COULD have tailored resumes but DB doesn't know about
+    unlinked = conn.execute(
+        "SELECT url, title, site FROM jobs "
+        "WHERE fit_score >= 7 AND full_description IS NOT NULL "
+        "AND tailored_resume_path IS NULL"
+    ).fetchall()
+
+    for row in unlinked:
+        url, title, site = row[0], row[1], row[2]
+        safe_title = re.sub(r"[^\w\s-]", "", title)[:50].strip().replace(" ", "_")
+        safe_site = re.sub(r"[^\w\s-]", "", site)[:20].strip().replace(" ", "_")
+        prefix = f"{safe_site}_{safe_title}"
+
+        txt_path = TAILORED_DIR / f"{prefix}.txt"
+        if txt_path.exists() and txt_path.stat().st_size > 100:
+            conn.execute(
+                "UPDATE jobs SET tailored_resume_path=?, tailored_at=? WHERE url=?",
+                (str(txt_path), now, url),
+            )
+            result["tailored_linked"] += 1
+
+    # Same for cover letters: jobs with tailored resume but no cover letter path
+    unlinked_cl = conn.execute(
+        "SELECT url, title, site FROM jobs "
+        "WHERE tailored_resume_path IS NOT NULL "
+        "AND (cover_letter_path IS NULL OR cover_letter_path = '')"
+    ).fetchall()
+
+    for row in unlinked_cl:
+        url, title, site = row[0], row[1], row[2]
+        safe_title = re.sub(r"[^\w\s-]", "", title)[:50].strip().replace(" ", "_")
+        safe_site = re.sub(r"[^\w\s-]", "", site)[:20].strip().replace(" ", "_")
+        prefix = f"{safe_site}_{safe_title}"
+
+        cl_path = COVER_LETTER_DIR / f"{prefix}_CL.txt"
+        if cl_path.exists() and cl_path.stat().st_size > 200:
+            conn.execute(
+                "UPDATE jobs SET cover_letter_path=?, cover_letter_at=? WHERE url=?",
+                (str(cl_path), now, url),
+            )
+            result["covers_linked"] += 1
+
+    # --- Phase 2: Reset exhausted attempts for jobs without output ---
+    # Jobs that hit max attempts but have no output file — let them retry
+    reset_tailor = conn.execute(
+        "UPDATE jobs SET tailor_attempts = 0 "
+        "WHERE COALESCE(tailor_attempts, 0) >= 5 "
+        "AND tailored_resume_path IS NULL"
+    ).rowcount
+    result["tailor_attempts_reset"] = reset_tailor
+
+    reset_cover = conn.execute(
+        "UPDATE jobs SET cover_attempts = 0 "
+        "WHERE COALESCE(cover_attempts, 0) >= 5 "
+        "AND (cover_letter_path IS NULL OR cover_letter_path = '')"
+    ).rowcount
+    result["cover_attempts_reset"] = reset_cover
+
+    conn.commit()
+    return result
+
+
 def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
                site: str, strategy: str) -> tuple[int, int]:
     """Store discovered jobs, skipping duplicates by URL.
